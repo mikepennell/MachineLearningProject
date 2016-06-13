@@ -2,7 +2,7 @@
 title: "Predicting Exersize Performance"
 author: "Mike Pennell"
 date: "June 12, 2016"
-output: html_document
+output: pdf_document
 ---
 ## Executive Summary
 
@@ -116,6 +116,7 @@ for (user in users) {
 The data is a time series data set and the exercises are completed in a series of repetitive motions.  Ideally, the data should be modeled as a time series and features extracted based on patterns in sequential readings of each sensor.   As such a relative timer was derived for each set of 10 repetitions to enable visualization and comparison of the different exercises by user and sensor feature.   The following visualizations illustrate the patterns showing 1) 5 important sensor readings comparing each class of exercise (A-E) and 2) a single important sensor reading (magnet_dumbbell_y) for each user.  It is evident that the individual sensor readings vary significantly at different time points in the exercise and that readings from individual users vary significantly from other participants performing the exercise in the same manner (same class).
 
 ``` {r Plot, echo=TRUE, fig.height=8, eval=TRUE}
+
 # Monitoring time series readings for 1 user comparing different classes (exersize mistakes)
 userMelt <- melt(trAvail[trAvail$user_name==users[1],], id.vars = c("classe", "user_name", "rel_time"), measure.vars = shortlist[2:6], variable.name = "feature", value.name = "value")
 userPlot <- ggplot(data = userMelt, aes(x = rel_time, y = value)) +
@@ -171,6 +172,9 @@ _Note that these exclusions were based on the expected use of the model to provi
 mt
 confusionMatrix(mt)
 varImp(mt)
+par(mfrow=c(1,1))
+plot(mt)
+
 ```
 ## Modeling
 This is a multiclass classification problem.   As such there are a variety of algorithms that could be applied including logistic regression, decision trees, random forests and others.   Given a multiclass classification problem with a large set of predictors, the random forest model was chosen for this application as it has typically performed best under these circumstances.  Decision tree and logistic regression models were tested, but the results were significantly less predictive.
@@ -182,13 +186,24 @@ Leakage predictors were removed.  The random forest cross validation (rfcf) was 
 # rfmt <- rfcv(trModel[,-53], trModel[,53])
 rfmt$error.cv
 ```
+The number of trees can be significantly reduced.   The error rate stabilizes after 50 trees.
+`````` {r RF Tree Analysis, echo=TRUE}
+par(mfrow=c(1,1))
+plot(mt$finalModel)
 
-Subsequently the 10 most important predictors were chosen based on information gain/loss and the final model achieved a .989 accuracy based on oob error with just 50 trees and 2 predictors sampled with each split.   This model was parsimonious, computed in a a few minutes and achieved very similar accuracy.
+```
+
+Subsequently the 10 most important predictors (shortlist) were chosen based on information gain/loss.
 
 ``` {r Feature Selection, echo=TRUE}
 iOrder <- order(with(varImp(mt)$importance, pmax(A,B,C,D,E)),decreasing=TRUE)
 shortlist <- append("classe",row.names(varImp(mt)$importance[iOrder,])[1:10])
+shortlist
+```
 
+The final model achieved a .989 accuracy based on oob error with just 50 trees and 2 predictors sampled with each split.   This model was parsimonious, computed in a a few minutes and achieved very similar accuracy.
+
+``` {r Model Training, echo=TRUE}
 # mt10 <- train(classe ~ .,method="rf", data=trModel[,shortlist], importance = TRUE, ntree=50)
 mt10
 ```
