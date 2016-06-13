@@ -1,0 +1,265 @@
+---
+title: "Predicting Exersize Performance"
+author: "Mike Pennell"
+date: "June 12, 2016"
+output: html_document
+---
+## Executive Summary
+
+This study attempts to predict how well users execute weight-lifting exercises and detect mistakes using sensors attached to participants and equipment.  Study participant were asked to perform barbell lifts correctly and incorrectly in 6 different ways while their movements were measured. A random forest model was trained to predict whether the exercise was performed correctly or the class of mistake made. The model achieved accuracy exceeding .985 indicating there is high confidence the model will predict accurately for these same users and exercises.  However, validation of the model by leaving the data from 1 participant out of the training set and validating against the data from the participant left out showed poor accuracy.  Therefore, the model is inaccurate at predicting whether any other user performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project as the test data did not support this usage. 
+
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. The purpose of the study used in this analysis was to quantify how well users did a particular activity and detect mistakes in weight-lifting exercises through activity recognition techniques using wearable sensors and machine learning to classify each mistake. The data is from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. Each participant was asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+Inertial measurement units (IMU) provided three-axes acceleration, gyroscope and magnetometer data at a joint sampling rate of 45 Hz. Each IMU also featured a Bluetooth module to stream the recorded data to a notebook/  Participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in the following fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years with little weight lifting experience using a relatively light dumbbell (1.25kg).
+
+```{r Initialization, echo=FALSE}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(tidyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(reshape2))
+suppressPackageStartupMessages(library(e1071))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(rpart))
+suppressPackageStartupMessages(library(randomForest))
+
+# put histograms on the diagonal
+panel.hist <- function(x, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5) )
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks; nB <- length(breaks)
+    y <- h$counts; y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y, col = "cyan", ...)
+}
+
+## put (absolute) correlations on the upper panels
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- abs(cor(x, y))
+    txt <- format(c(r, 0.123456789), digits = digits)[1]
+    txt <- paste0(prefix, txt)
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = cex.cor * r)
+}
+
+setwd("~/OneDrive/Documents/0 SourceThought Private/Data Science Course/Machine Learning")
+train = read.csv("pml-training.csv")
+test = read.csv("pml-testing.csv")
+load("MLModels.RData")
+```
+## Discovery and Preparation
+
+The training and test data were reviewed to assess best options for modeling.
+
+### Training and Test Data
+* Training:  19,622 sets of time series sensor readings from 6 participants performing exercises in 1 correct method (class = A) and 4 incorrect methods (class = B, C, D, E)
+* Testing:  20 selected individual sensors readings collected from each of the 6 participant.  Class is unknown.
+
+``` {r Data Summary}
+nrow(train) # Training Data
+summary(train$user_name) # Participant Data
+summary(train$classe) # Class of exercise performance
+
+# Naive Class Prediction; Majority Class: A
+summary(train$classe)/length(train$classe)
+```
+
+``` {r Data Review, echo=FALSE}
+sumFrame <- function (sData) {
+  sumr <- gsub(",",";",t(summary(sData)))
+  sumr <- gsub("\\s+"," ", sumr)
+  sFrame <- data.frame(
+    attID = seq(1,nrow(sumr)),
+    attName = gsub("\\s", "", rownames(sumr)),
+    v1 = sumr[,1],v2 = sumr[,2],v3 = sumr[,3],v4 = sumr[,4],v5 = sumr[,5],v6 = sumr[,6],
+    stringsAsFactors = FALSE)
+  if (dim(sumr)[2]>6) {
+        sFrame$v7 = sumr[,7]
+      } else {
+        sFrame$v7 = NA
+      }
+  sFrame
+}
+
+sumForCSV <- sumFrame(train)
+write.csv(sumForCSV, file = "trainingSummary.csv")
+testForCSV <- sumFrame(test)
+write.csv(testForCSV, file = "testingSummary.csv")
+```
+
+``` {r Data Prep, echo=TRUE}
+nzvTrain <- nearZeroVar(train, saveMetrics = TRUE)
+nzvTest <- nearZeroVar(test, saveMetrics = TRUE)
+trAvail <- train[,!nzvTest$zeroVar]
+
+trAvail$full_time <- trAvail$raw_timestamp_part_1 * 1000000 + trAvail$raw_timestamp_part_2
+users <- unique(trAvail$user_name)
+classes <- unique(trAvail$classe)
+trAvail <- arrange(trAvail, user_name, classe, full_time)
+trAvail$rel_time <- 0
+for (user in users) {
+  for (class in classes) {
+    rl <- nrow(trAvail[trAvail$user_name == user & trAvail$classe == class,])
+    trAvail[trAvail$user_name == user & trAvail$classe == class, "rel_time"] = seq(1:rl)
+  }
+}
+```
+### Time Series
+The data is a time series data set and the exercises are completed in a series of repetitive motions.  Ideally, the data should be modeled as a time series and features extracted based on patterns in sequential readings of each sensor.   As such a relative timer was derived for each set of 10 repetitions to enable visualization and comparison of the different exercises by user and sensor feature.   The following visualizations illustrate the patterns showing 1) 5 important sensor readings comparing each class of exercise (A-E) and 2) a single important sensor reading (magnet_dumbbell_y) for each user.  It is evident that the individual sensor readings vary significantly at different time points in the exercise and that readings from individual users vary significantly from other participants performing the exercise in the same manner (same class).
+
+``` {r Plot, echo=TRUE, fig.height=8, eval=TRUE}
+# Monitoring time series readings for 1 user comparing different classes (exersize mistakes)
+userMelt <- melt(trAvail[trAvail$user_name==users[1],], id.vars = c("classe", "user_name", "rel_time"), measure.vars = shortlist[2:6], variable.name = "feature", value.name = "value")
+userPlot <- ggplot(data = userMelt, aes(x = rel_time, y = value)) +
+    geom_line(aes(colour = classe)) +
+    facet_grid(feature ~ ., scales = "free_y") +
+    labs(title= paste("Comparing 5 important features for single participant:", users[1]))
+userPlot
+
+# Monitoring time series readings for all users for single important feature by class)
+sensorMelt <- melt(trAvail, id.vars = c("classe", "user_name", "rel_time"), measure.vars = shortlist[2], variable.name = "feature", value.name = "value")
+featurePlot <- ggplot(data = sensorMelt, aes(x = rel_time, y = value)) +
+    geom_line(aes(colour = user_name)) +
+    facet_grid(classe ~ ., scales = "free_y") +
+    labs(title= paste("Comparing participants for single important feature:", shortlist[2]))
+featurePlot
+
+``` 
+
+### Test Data Limitations
+The test data is not a time series, but is instead a set of 20 discontinuous sensor readings from each of the participants. Therefore, it is not feasible to use a time series model to predict the test data.   
+
+Also, the training data includes window based aggregates that provide an indicator as to the variance and trending of the data over time.   This aggregate data is not available in the test data and needs to be excluded from the model to enable accurate prediction.   As a result, the following features were excluded:
+``` {r Test Data Limitations, echo=TRUE}
+names(test)[nzvTest$zeroVar]
+```
+
+## Assumed Modeling Objective
+Based on the above limitations of the test data, it is assumed that the objective of this analysis is to determine if a model can classify exercise performance (class) based on sensor readings at any specific point in time.   This is consistent with the test data. 
+
+_Note: Given the obvious time series nature of the data, it seems unrealistic to expect a model to be predictive given just data from a single point in time, but that is what the test data requires so that is modeled in this analysis._
+
+## Leakage
+Additionally, the model should eliminate other data which would be unavailable at the time of model execution and is available only as a result of the experimental procedures and data collection.  This is called leakage.  A random forest model was generated based on the training data, including all predictors provided in the test data (but not the test data).  The most important features were reviewed to identify potential leakage.   The 20 most important features were:
+``` {r Importance, echo = TRUE}
+# md <- train(classe ~ .,method="rf", data=trAvail, importance = TRUE)
+mdOrder <- order(with(varImp(md)$importance, pmax(A,B,C,D,E)),decreasing=TRUE)
+row.names(varImp(md)$importance[mdOrder,])[1:20]
+```
+
+Given the exercises were done by users in a specific series, the order (X) and time of the sensor relative to other test results became important in the model and yet would not be relevant to a new user performing activity for the first time.  Similarly, the identity of the user would not be known unless the model is going to be retrained for each new user (i.e. each new user would have to perform each exercise correctly and performing each type of mistake which is impractical).   So the following features were excluded from the model.  
+
+``` {r Exclusions, echo=TRUE}
+remove <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "full_time", "rel_time", "num_window")
+trModel <- trAvail[,setdiff(names(trAvail),remove)]
+```
+The remaining features were  the sensor readings taken from the various monitoring devices along with the target class.  These are the relevant features available for the model:
+``` {r Inclusions, echo=TRUE}
+names(trModel)
+```
+_Note that these exclusions were based on the expected use of the model to provide insight and feedback for new users performing an exercise at some future time.   This was the intent of the original research._
+``` {r Modeling, echo=FALSE, eval=FALSE}
+# mt <- train(classe ~ .,method="rf", data=trModel, importance = TRUE, ntree=50)
+mt
+confusionMatrix(mt)
+varImp(mt)
+```
+## Modeling
+This is a multiclass classification problem.   As such there are a variety of algorithms that could be applied including logistic regression, decision trees, random forests and others.   Given a multiclass classification problem with a large set of predictors, the random forest model was chosen for this application as it has typically performed best under these circumstances.  Decision tree and logistic regression models were tested, but the results were significantly less predictive.
+	
+Using 500 trees (default) and including all available predictors, the random forest model achieved a .992 accuracy based on out of bag (oob) error using 27 predictors (mtry).   However this model required several hours to run and included leakage. (not shown)
+
+Leakage predictors were removed.  The random forest cross validation (rfcf) was run (see below) to determine that a near .99 accuracy could be achieved with just 10 predictors.   
+``` {r RF Cross Validate, echo=TRUE}
+# rfmt <- rfcv(trModel[,-53], trModel[,53])
+rfmt$error.cv
+```
+
+Subsequently the 10 most important predictors were chosen based on information gain/loss and the final model achieved a .989 accuracy based on oob error with just 50 trees and 2 predictors sampled with each split.   This model was parsimonious, computed in a a few minutes and achieved very similar accuracy.
+
+``` {r Feature Selection, echo=TRUE}
+iOrder <- order(with(varImp(mt)$importance, pmax(A,B,C,D,E)),decreasing=TRUE)
+shortlist <- append("classe",row.names(varImp(mt)$importance[iOrder,])[1:10])
+
+# mt10 <- train(classe ~ .,method="rf", data=trModel[,shortlist], importance = TRUE, ntree=50)
+mt10
+```
+## Cross Validation
+The random forest accuracy is calculated using out of bag error which inherently estimates test set accuracy.   To further assess likely test set accuracy, an additional k-fold cross validation was conducted using 5 folds and the accuracy had a mean of .992.   This is within the .95 confidence of of the accuracy estimate based on oob error.
+``` {r Cross Validation, echo=TRUE}
+folds <- createFolds(trModel$classe, k=5)
+crossTrain <- function(fold) {train(classe ~ .,method="rf", data=trModel[-fold,shortlist], ntree=50)}
+# crossModel <- lapply(folds, crossTrain)
+crossValidate <- function(i) {
+  confusionMatrix(predict(crossModel[[i]],newdata = trModel[folds[[i]],shortlist]),trModel[folds[[i]],"classe"])
+}
+# crossValidated <- lapply(1:length(folds),crossValidate)
+crossAcc <- function(cV) {cV$overall[1]}
+crossAccuracy <- sapply(crossValidated, crossAcc)
+crossAccuracy
+mean(crossAccuracy)
+```
+Hence there is high confidence that the model will be very accurate (accuracy > .987 with 97.5% confidence) for the testing data since the testing data is from the same users performing the same exercises as the training data.  The model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly exactly as he did in the experiment.
+``` {r Training Performance, echo=FALSE, eval=FALSE}
+# performance for training set
+prt <- predict(mt10,trModel[,shortlist])
+confusionMatrix(prt, trModel[,"classe"]) #from Training Data
+```
+## Cross Validation of New Users/Exercises
+The primary objective of the experiment is to detect when a user is performing an exercise incorrectly.   It can be implied based on these objectives that the users of these devices would not necessarily be one of the 6 users who participated in the test nor that the the exercise would be executed in the same manner.   The appropriate validation is whether the model can detect if a new user is performing the exercise in similar (but not identical) manner as the training classes.
+	
+Therefore, the model was further validated by leaving each participant out of the training set, training the model and testing against the data set from the participant that was left out.   The accuracy results were much worse.
+
+```{r Cross Validate Participant, echo=TRUE}
+userFolds <- split(1:nrow(trAvail), trAvail$user_name)
+userCrossTrain <- function(userFold) {train(classe ~ .,method="rf", data=trModel[-userFold,shortlist], ntree=50)}
+# userCrossModel <- lapply(userFolds, userCrossTrain)
+userCrossValidate <- function(i) {
+  confusionMatrix(predict(userCrossModel[[i]], newdata = trModel[userFolds[[i]],shortlist]),
+                  trModel[userFolds[[i]],"classe"])
+}
+# userCrossValidated <- lapply(1:length(users),userCrossValidate)
+userCrossAcc <- function(ucV) {ucV$overall[1]}
+userCrossAccuracy <- sapply(userCrossValidated, userCrossAcc)
+names(userCrossAccuracy) = users
+userCrossAccuracy
+mean(userCrossAccuracy)
+```
+The mean accuracy is .39 and in the case of carlitos, the accuracy is worse that the majority class prediction (Class = A: 28%).   Clearly the model is inaccurate at predicting exercise errors for other users performing the exercise even when the user is attempting to perform the errors in a consistent manner as instructed.   There are no test cases for users executing the exercise in any other manner than that specified, but it can be reasonably assumed that the model prediction accuracy would be worse.
+
+# Conclusion
+The final random forest model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly as specified in the experiment.   The model was parsimonious using only 50 trees and sampling just 2 predictors at a time, and was able to achieve accuracy exceeding .985.   There is high confidence that the test set will perform with similar accuracy based on cross validation.
+
+However, validation of the model by leaving the data from 1 participant out of the training set and validating against the data from the participant left out showed very poor accuracy.  Therefore, the model is inaccurate at predicting whether any other user performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project.   
+
+To achieve the objectives of the experiment, the model should incorporate the time series nature of the data and extract features from the patterns of data over the series of movements and exercises.   This was beyond the scope of this project since the test data did not provide the necessary data to execute such a test.
+
+# Final Test Results
+Below are the results from executing the model against the test data.   These were all correctly classified.
+
+```{r TEst, echo=TRUE, eval=TRUE}
+# test execution
+testResults <- data.frame(predict(mt10, test))
+print(testResults)
+```
+
+```{r Unused, echo=FALSE, eval=FALSE}
+mrpart <- train(classe ~ .,method="rpart", data=trModel)
+mrpart
+mrpartShort <- train(classe ~ .,method="rpart", data=trModel[,shortlist])
+mrpartShort$finalModel
+plot(mrpartShort$finalModel, uniform=TRUE, main="Classification Tree")
+text(mrpartShort$finalModel, use.n=TRUE, all=TRUE)
+```
+
+``` {r Save Models, echo=FALSE, eval=FALSE}
+save(md, mt, mt10, rfmt, crossModel, userCrossModel, crossValidated, userCrossValidated, mrpart, mrpartShort, shortlist, file = "MLModels.RData")
+```
