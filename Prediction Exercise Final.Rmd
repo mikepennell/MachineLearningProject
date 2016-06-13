@@ -1,21 +1,21 @@
 ---
-title: "Predicting Exersize Performance"
+title: "Predicting Exercise Performance"
 author: "Mike Pennell"
 date: "June 12, 2016"
 output: pdf_document
 ---
 ## Executive Summary
 
-This study attempts to predict how well users execute weight-lifting exercises and detect mistakes using sensors attached to participants and equipment.  Study participant were asked to perform barbell lifts correctly and incorrectly in 6 different ways while their movements were measured. A random forest model was trained to predict whether the exercise was performed correctly or the class of mistake made. The model achieved accuracy exceeding .985 indicating there is high confidence the model will predict accurately for these same users and exercises.  However, validation of the model by leaving the data from 1 participant out of the training set and validating against the data from the participant left out showed poor accuracy.  Therefore, the model is inaccurate at predicting whether any other user performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project as the test data did not support this usage. 
+This study attempts to predict how well users execute weight-lifting exercises and detect mistakes using sensors attached to participants and equipment.  Study participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways while their movements were measured. A random forest model was trained to predict whether the exercise was performed correctly or the class of mistake made. The model achieved accuracy exceeding .985 indicating there is high confidence the model will predict accurately for these same users and exercises.  However, validation of the model by leaving the data from a single participant out of the training set and validating against the data from that excluded  participant showed poor accuracy.  Therefore, the model is inaccurate at predicting whether any other user performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project as the test data did not support this usage. 
 
 
 ## Background
 
-Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. The purpose of the study used in this analysis was to quantify how well users did a particular activity and detect mistakes in weight-lifting exercises through activity recognition techniques using wearable sensors and machine learning to classify each mistake. The data is from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. Each participant was asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. The purpose of the study underlying this analysis was to quantify how well users did a particular activity and detect mistakes in weight-lifting exercises through activity recognition techniques using wearable sensors and machine learning to classify each mistake. The data is from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. Each participant was asked to perform barbell lifts correctly and incorrectly in 5 different ways.
 
-Inertial measurement units (IMU) provided three-axes acceleration, gyroscope and magnetometer data at a joint sampling rate of 45 Hz. Each IMU also featured a Bluetooth module to stream the recorded data to a notebook/  Participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in the following fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+Inertial measurement units (IMU) provided three-axes acceleration, gyroscope and magnetometer data at a joint sampling rate of 45 Hz. Each IMU also featured a Bluetooth module to stream the recorded data to a notebook.  Participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in the following fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
 
-Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years with little weight lifting experience using a relatively light dumbbell (1.25kg).
+Participants were supervised by an experienced weight lifter to make sure the exercise performance complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years with little weight lifting experience using a relatively light dumbbell (1.25kg).
 
 ```{r Initialization, echo=FALSE}
 suppressPackageStartupMessages(library(dplyr))
@@ -156,10 +156,11 @@ mdOrder <- order(with(varImp(md)$importance, pmax(A,B,C,D,E)),decreasing=TRUE)
 row.names(varImp(md)$importance[mdOrder,])[1:20]
 ```
 
-Given the exercises were done by users in a specific series, the order (X) and time of the sensor relative to other test results became important in the model and yet would not be relevant to a new user performing activity for the first time.  Similarly, the identity of the user would not be known unless the model is going to be retrained for each new user (i.e. each new user would have to perform each exercise correctly and performing each type of mistake which is impractical).   So the following features were excluded from the model.  
+Given the exercises were done by users in a specific series, the order (X) and time of the sensor relative to other test results became important in the model and yet would not be available for the user at the time they performed the activity.  Similarly, the identity of the user would not be known unless the model is going to be retrained for each new user (i.e. each new user would have to perform each exercise correctly and in the manner of each type of mistake which is impractical).   So the following features were excluded from the model.  
 
 ``` {r Exclusions, echo=TRUE}
 remove <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "full_time", "rel_time", "num_window")
+remove
 trModel <- trAvail[,setdiff(names(trAvail),remove)]
 ```
 The remaining features were  the sensor readings taken from the various monitoring devices along with the target class.  These are the relevant features available for the model:
@@ -186,7 +187,7 @@ Leakage predictors were removed.  The random forest cross validation (rfcf) was 
 # rfmt <- rfcv(trModel[,-53], trModel[,53])
 rfmt$error.cv
 ```
-The number of trees can be significantly reduced.   The error rate stabilizes after 50 trees.
+The number of trees can be reduced.   The error rate stabilizes after 50 trees.
 `````` {r RF Tree Analysis, echo=TRUE}
 par(mfrow=c(1,1))
 plot(mt$finalModel)
@@ -201,14 +202,14 @@ shortlist <- append("classe",row.names(varImp(mt)$importance[iOrder,])[1:10])
 shortlist
 ```
 
-The final model achieved a .989 accuracy based on oob error with just 50 trees and 2 predictors sampled with each split.   This model was parsimonious, computed in a a few minutes and achieved very similar accuracy.
+The final model achieved a .989 accuracy based on oob error with 50 trees and 10 predictors sampling 2 predictors with each split.  This model was parsimonious, computed in a few minutes and achieved near similar accuracy as the complete data set.
 
 ``` {r Model Training, echo=TRUE}
 # mt10 <- train(classe ~ .,method="rf", data=trModel[,shortlist], importance = TRUE, ntree=50)
 mt10
 ```
 ## Cross Validation
-The random forest accuracy is calculated using out of bag error which inherently estimates test set accuracy.   To further assess likely test set accuracy, an additional k-fold cross validation was conducted using 5 folds and the accuracy had a mean of .992.   This is within the .95 confidence of of the accuracy estimate based on oob error.
+The random forest accuracy is calculated using out of bag error which inherently estimates out of sample and test set accuracy.   To further assess likely test set accuracy, an additional k-fold cross validation was conducted using 5 folds and the accuracy had a mean of .992.   This is within the .95 confidence of the accuracy estimate from the original model based on oob error.
 ``` {r Cross Validation, echo=TRUE}
 folds <- createFolds(trModel$classe, k=5)
 crossTrain <- function(fold) {train(classe ~ .,method="rf", data=trModel[-fold,shortlist], ntree=50)}
@@ -222,16 +223,16 @@ crossAccuracy <- sapply(crossValidated, crossAcc)
 crossAccuracy
 mean(crossAccuracy)
 ```
-Hence there is high confidence that the model will be very accurate (accuracy > .987 with 97.5% confidence) for the testing data since the testing data is from the same users performing the same exercises as the training data.  The model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly exactly as he did in the experiment.
+Hence there is high confidence that the model will be very accurate (accuracy > .987 with 97.5% confidence) for the testing data since the testing data is from the same users performing the same exercises as the training data.  The model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly exactly as he did in the original experiment.
 ``` {r Training Performance, echo=FALSE, eval=FALSE}
 # performance for training set
 prt <- predict(mt10,trModel[,shortlist])
 confusionMatrix(prt, trModel[,"classe"]) #from Training Data
 ```
 ## Cross Validation of New Users/Exercises
-The primary objective of the experiment is to detect when a user is performing an exercise incorrectly.   It can be implied based on these objectives that the users of these devices would not necessarily be one of the 6 users who participated in the test nor that the the exercise would be executed in the same manner.   The appropriate validation is whether the model can detect if a new user is performing the exercise in similar (but not identical) manner as the training classes.
+The primary objective of the experiment is to detect when any user is performing an exercise incorrectly.   It can be implied based on these objectives that the users of these devices would not necessarily be one of the 6 users who participated in the test nor that the exercise would be executed in the exact same manner as the original experiment.   The appropriate validation is whether the model can detect if a new user is performing the exercise in similar (but not identical) manner as the training classes.
 	
-Therefore, the model was further validated by leaving each participant out of the training set, training the model and testing against the data set from the participant that was left out.   The accuracy results were much worse.
+Therefore, the model was further validated by leaving each participant out of the training set, training the model and testing against the participant left out.   The accuracy results were much worse.
 
 ```{r Cross Validate Participant, echo=TRUE}
 userFolds <- split(1:nrow(trAvail), trAvail$user_name)
@@ -251,9 +252,9 @@ mean(userCrossAccuracy)
 The mean accuracy is .39 and in the case of carlitos, the accuracy is worse that the majority class prediction (Class = A: 28%).   Clearly the model is inaccurate at predicting exercise errors for other users performing the exercise even when the user is attempting to perform the errors in a consistent manner as instructed.   There are no test cases for users executing the exercise in any other manner than that specified, but it can be reasonably assumed that the model prediction accuracy would be worse.
 
 # Conclusion
-The final random forest model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly as specified in the experiment.   The model was parsimonious using only 50 trees and sampling just 2 predictors at a time, and was able to achieve accuracy exceeding .985.   There is high confidence that the test set will perform with similar accuracy based on cross validation.
+The final random forest model accurately predicts whether one of these participants is performing the exercise correctly or incorrectly as specified in the experiment.   The model was parsimonious using only 50 trees and 10 predictors sampling just 2 predictors at a time.  It was able to achieve accuracy exceeding .987.   There is high confidence that the test set will perform with similar accuracy based on cross validation.
 
-However, validation of the model by leaving the data from 1 participant out of the training set and validating against the data from the participant left out showed very poor accuracy.  Therefore, the model is inaccurate at predicting whether any other user performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project.   
+However, validation of the model by leaving the data from a single participant out of the training set and then validating the model using the data for that excluded participant showed very poor accuracy.  Therefore, the model is inaccurate at predicting whether other users performing these exercises are doing so correctly.  This was the intent of the study, but was not included in the requirements for this project.   
 
 To achieve the objectives of the experiment, the model should incorporate the time series nature of the data and extract features from the patterns of data over the series of movements and exercises.   This was beyond the scope of this project since the test data did not provide the necessary data to execute such a test.
 
